@@ -236,3 +236,209 @@ if owner != user {
     obj.SetOwner(user)
 }
 ```
+
+### Interface
+
+一般情况下， 如果接口（Interface）只有一个方法，那我们就用方法名加er后缀来命名这个接口，或者是使用对应的代理名词，比如：Reader、Writer、Formatter、CloseNotifier等。
+
+这种名字有很多，而且都能很好的表达出它们的含义。Read、Write、Close、Flush、String等等，都使用了准确的签名和含义。为了避免混淆，如果不是签名和含义完全一致，那你自己的方法就不要起这种名字。同样，如果你的方法和一个常见的方法拥有相同的含义，那你也应该使用同样的签名；比如你自己的字符串转换方法就得是String而不是ToString。
+
+### MixedCap
+
+最后，Go中的习惯是使用MixedCap或者mixedCap这样的标记法，而不用下划线或者多字结构。
+
+## 分号的用法
+
+和C一样，Go的标准语法也使用分号作为语句的结束，但不同之处在于，分号不是写在源代码中的。词法分析器在扫描源码的时候，会使用一种简单的规则来自动插入分号，因此输入的文本一般就不需要加分号了。
+
+规则如下。如果一行中的最后一个标记是一个标识符（包括int和float64这种关键字），或者一个基本的字面量，比如数字或者字符串常量，又或者是下面的标记之一
+
+```go
+break continue fallthrough return ++ -- ) }
+```
+
+词法分析器则总是会在它们的后面插入一个分号。这就可以总结为：“如果新的一行之前的最后一个标记能够结束一个语句，那就在这里插入一个分号”。
+
+可以在右括号之前直接省略分号，比如这样的语句
+
+```go
+go func() { for { dst <- <-src } }()
+```
+
+就不需要分号。典型的Go程序只有在for循环这样的语法中会用到分号，用来区分初始化、条件判断和继续执行的部分。还有如果你把多个语句写在同一行里，那也需要加上分号用来区分。
+
+分号插入规则导致的一个结果是，你不能把控制结构（if、for、switch或select）的左括号放在下一行。如果你这么干了，括号前就会插入一个分号，那就会导致不一样的结果。比如应该写成
+
+```go
+if i < f() {
+    g()
+}
+```
+
+而不是
+
+```go
+if i < f() // 不对了！
+{          // 不对了！
+    g()
+}
+```
+
+## 控制流
+
+Go的控制流源自C，但又有很重要的不同之处。这里没有do和while循环，只有一个稍显宽泛的for循环；这里的switch更加灵活；if和switch都能像for一样声明一个初始化部分；break和continue语句可以增加一个可选的标签来表明要跳出或继续的部分；而且这里还有一些新的控制流，比如类型switch以及多路复用器select。语法也稍有不同：这里没有圆括号，语法体必须要用花括号括起来。
+
+### If
+
+Go里面的if是这样：
+
+```go
+if x > 0 {
+    return y
+}
+```
+
+强制使用花括号可以让简单的if语句横跨多行。这样写是很好的风格，特别是当其中还会包含return或break这种控制语句。
+
+因为if和switch可以声明一个初始化部分，一般就都会引入一个局部变量。
+
+```go
+if err := file.Chmod(0664); err != nil {
+    log.Print(err)
+    return err
+}
+```
+
+在Go的标准库中你会发现，如果if语句导致控制流不继续往下走了——以break、continue、goto或return结尾——一般都会省略多余的else。
+
+```go
+f, err := os.Open(name)
+if err != nil {
+    return err
+}
+codeUsing(f)
+```
+
+下面的栗子是一个常见的判断多种错误情况的代码。如果按照正常执行的情况，代码的可读性就很好，直接跳过错误处理的部分。因为错误情况一般会用return来结束执行，也就不需要加多余的else了。
+
+```go
+f, err := os.Open(name)
+if err != nil {
+    return err
+}
+d, err := f.Stat()
+if err != nil {
+    f.Close()
+    return err
+}
+codeUsing(f, d)
+```
+
+### 重新声明与重新赋值
+
+上一节最后这个小栗子也展示了:=这个短声明语法。它调用了os.Open，
+
+```go
+f, err := os.Open(name)
+```
+
+这个语句声明了两个变量，f和err。接着往下，它又调用了f.Stat，
+
+```go
+d, err := f.Stat()
+```
+
+这里看上去它声明了d和err。注意这两个语句中都出现了err。这种复用是ok的：err由第一个语句声明，但是在第二个语句中进行了重新赋值。也就是说调用f.Stat的时候使用了上面已经声明的err变量，只不过给它赋了一个新值。
+
+在:=声明中，可以使用已经声明过的变量v，比如：
+
+- 该声明和变量v已有的声明在同一个作用域中（如果变量v在外层作用域中声明，此处会创建一个新的变量），
+- 初始化部分生成的值会赋值给v，
+- 这种声明至少还会创建一个其他的变量。
+
+这种不常见的规矩非常实用，这样可以在一长串的if-else中仅使用一个err变量。你会发现你经常需要这么干。
+
+这里值得注意的是，在Go中，函数的参数和返回值跟函数体处于同一个作用域中，即便它们在语法上是出现在花括号之外的。
+
+### For循环
+
+Go的for循环换和C类似但又不尽相同。它统一了for和while循环，但又不包括do-while。一共有三种形式，只有一种会包含分号。
+
+```go
+// C风格的for
+for init; condition; post { }
+// C风格的while
+for condition { }
+// C风格的for(;;)
+for { }
+```
+
+短声明语法非常便于用来声明循环中用到的索引变量。
+
+```go
+sum := 0
+for i := 0; i < 10; i++ {
+    sum += i
+}
+```
+
+如果你是遍历一个数组、slice、或者是map，又或者是从一个channel中往出读数据，可以用range来处理这种循环。
+
+```go
+for key, value := range oldMap {
+    newMap[key] = value
+}
+```
+
+如果你只需要每次range的第一个元素（key或者索引），那就直接去掉第二个：
+
+```go
+for key := range m {
+    if key.expired() {
+        delete(m, key)
+    }
+}
+```
+
+如果你只需要range的第二个元素（值），使用*空标识符（blank identifier）*，即一个下划线，来丢弃第一个元素：
+
+```go
+sum := 0
+for _, value := range array {
+    sum += value
+}
+```
+
+空标识符用法很多，见[后面](#空标识符)。
+
+对于字符串，range也可以帮你干很多事儿，它可以分析UTF-8并拆分出Unicode代码点。错误的编码则按字节进行读取，并以rune字符U+FFFD展示。（rune这个名字（同时也是一个内置类型）用来表示Go中的一个Unicode代码点。详见[Go语言规范](Go语言规范)。）下面这个循环
+
+```go
+for pos, char := range "日本\x80語" { // \x80 is an illegal UTF-8 encoding
+    fmt.Printf("character %#U starts at byte position %d\n", char, pos)
+}
+```
+
+输出
+
+```text
+character U+65E5 '日' starts at byte position 0
+character U+672C '本' starts at byte position 3
+character U+FFFD '�' starts at byte position 6
+character U+8A9E '語' starts at byte position 7
+```
+
+最后，Go没有逗号操作符，++和--是语句而不是表达式。所以如果你要在for中声明多个变量，那就要用到并行赋值（不让用++和--）。
+
+```go
+// 反转a
+for i, j := 0, len(a)-1; i < j; i, j = i+1, j-1 {
+    a[i], a[j] = a[j], a[i]
+}
+```
+
+### Switch
+
+Go的switch比C的更加宽泛。它的表达式不需要为常量或者整型，case自上向下一个一个匹配计算，直到找到一个匹配的，如果swtich不带表达式，那就是true。因此就可以——也是常见用法——将一串if-else写成switch。
+
+## 空标识符
