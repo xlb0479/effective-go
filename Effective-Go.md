@@ -439,6 +439,115 @@ for i, j := 0, len(a)-1; i < j; i, j = i+1, j-1 {
 
 ### Switch
 
-Go的switch比C的更加宽泛。它的表达式不需要为常量或者整型，case自上向下一个一个匹配计算，直到找到一个匹配的，如果swtich不带表达式，那就是true。因此就可以——也是常见用法——将一串if-else写成switch。
+Go的switch比C的更加宽泛。它的表达式不需要为常量或者整型，case自上向下一个一个匹配计算，直到找到一个匹配的，如果swtich不带表达式，那就直接是true。因此就可以——也是常见用法——将一串if-else写成switch。
+
+```go
+func unhex(c byte) byte {
+    switch {
+    case '0' <= c && c <= '9':
+        return c - '0'
+    case 'a' <= c && c <= 'f':
+        return c - 'a' + 10
+    case 'A' <= c && c <= 'F':
+        return c - 'A' + 10
+    }
+    return 0
+}
+```
+
+执行流程不会自动向下fall through，但是case可以用逗号间隔写一堆。
+
+```go
+func shouldEscape(c byte) bool {
+    switch c {
+    case ' ', '?', '&', '=', '#', '+', '%':
+        return true
+    }
+    return false
+}
+```
+
+尽管我们在Go或者其他C风格的语言中不经常在switch中使用break，但还是要说一下它的作用，break可以让switch提前结束。有的时候还需要跳出外层的循环，不光是switch，在Go中就可以给循环加一个标签，然后直接跳到标签处。下面这个栗子展示了这些用法。
+
+```go
+Loop:
+	for n := 0; n < len(src); n += size {
+		switch {
+		case src[n] < sizeOne:
+			if validateOnly {
+				break
+			}
+			size = 1
+			update(src[n])
+
+		case src[n] < sizeTwo:
+			if n+1 >= len(src) {
+				err = errShortInput
+				break Loop
+			}
+			if validateOnly {
+				break
+			}
+			size = 2
+			update(src[n] + src[n+1]<<shift)
+		}
+	}
+```
+
+当然，还有continue也可以带标签，但是只能用在循环中。
+
+最后，我们对比一下两种用switch处理字节slice的方法：
+
+```go
+// Compare returns an integer comparing the two byte slices,
+// lexicographically.
+// The result will be 0 if a == b, -1 if a < b, and +1 if a > b
+func Compare(a, b []byte) int {
+    for i := 0; i < len(a) && i < len(b); i++ {
+        switch {
+        case a[i] > b[i]:
+            return 1
+        case a[i] < b[i]:
+            return -1
+        }
+    }
+    switch {
+    case len(a) > len(b):
+        return 1
+    case len(a) < len(b):
+        return -1
+    }
+    return 0
+}
+```
+
+### 类型Switch
+
+switch还可以用来判断一个接口变量的动态类型。这种*类型swtich（type swtich）*使用类型断言语法，在圆括号中加上type关键字。如果在switch表达式部分中声明了一个变量，变量就会得到对应的类型。这里一般会重用变量名，也就是用同样的名字声明一个变量，然后在不同的case中拥有不同的类型。
+
+```go
+var t interface{}
+t = functionOfSomeType()
+switch t := t.(type) {
+default:
+    fmt.Printf("unexpected type %T\n", t)     // %T prints whatever type t has
+case bool:
+    fmt.Printf("boolean %t\n", t)             // t has type bool
+case int:
+    fmt.Printf("integer %d\n", t)             // t has type int
+case *bool:
+    fmt.Printf("pointer to boolean %t\n", *t) // t has type *bool
+case *int:
+    fmt.Printf("pointer to integer %d\n", *t) // t has type *int
+}
+```
+
+## 函数
+
+### 返回多个值
+
+Go比较特殊的一点就是函数和方法都可以返回多个值。
 
 ## 空标识符
+
+前面在讲[For循环](#For循环)和[Map]()的时候已经提到过空标识符了。
