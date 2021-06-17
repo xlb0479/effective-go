@@ -546,7 +546,64 @@ case *int:
 
 ### 返回多个值
 
-Go比较特殊的一点就是函数和方法都可以返回多个值。
+Go比较特殊的一点就是函数和方法都可以返回多个值。这种形式可以有效缓解C程序中遇到的一些疼痛之处，比如腰间盘突出，脑血栓，冠心病等：“In-Band”错误时返回-1表示EOF，又或者是需要修改一个通过指针传入的参数。
+
+在C里面，写入错误发生时会得到一个负值，而错误码则隐藏在volatile位置中。在Go中，Write可以返回一个计数*和*一个错误：“是的，你写入了一些字节，但由于设备已满，并没有全部写入”。os包中的文件操作Write方法签名如下：
+
+```go
+func (file *File) Write(b []byte) (n int, err error)
+```
+
+正如我们所说，它返回了写入的字节数，并且当n!=len(b)时返回一个非空的error。这是一种常见的形式；更多内容可以去看错误处理相关的章节。
+
+这种形式还可以避免为了模拟引用参数而返回指针类型。下面这个函数从一个字节slice中计算出一个数，返回这个数以及下一个可以开始计算的位置。
+
+```go
+func nextInt(b []byte, i int) (int, int) {
+    for ; i < len(b) && !isDigit(b[i]); i++ {
+    }
+    x := 0
+    for ; i < len(b) && isDigit(b[i]); i++ {
+        x = x*10 + int(b[i]) - '0'
+    }
+    return x, i
+}
+```
+
+你可以用这个函数来扫描某个slice：
+
+```go
+    for i := 0; i < len(b); {
+        x, i = nextInt(b, i)
+        fmt.Println(x)
+    }
+```
+
+### 返回值命名
+
+Go函数的返回值，或者叫结果“参数”，可以给它们加上命名，当作一个普通的变量来用，就像是一个输入参数一样。加了名字以后，当函数开始执行的时候，就会将它们初始化成对应类型的零值；如果函数中执行了一个不带参数的return语句，则结果参数的当前值就作为返回值。
+
+我们并不强制你命名，但是有了名字可以让代码更加简洁：文档化。比如我们给nextInt的返回值加了命名，那么就很容易看出返回的int是啥玩意。
+
+```go
+func nextInt(b []byte, pos int) (value, nextPos int) {
+```
+
+因为命名的返回值会进行初始化并绑定到无参的return上，因此它们生而简洁。io.ReadFull就很好的利用了这一点：
+
+```go
+func ReadFull(r Reader, buf []byte) (n int, err error) {
+    for len(buf) > 0 && err == nil {
+        var nr int
+        nr, err = r.Read(buf)
+        n += nr
+        buf = buf[nr:]
+    }
+    return
+}
+```
+
+### Defer
 
 ## 空标识符
 
