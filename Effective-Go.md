@@ -605,6 +605,104 @@ func ReadFull(r Reader, buf []byte) (n int, err error) {
 
 ### Defer
 
+Go的defer声明可以用来在函数返回时立即调度执行一个函数（*延迟*函数）。这种形式同样不太常见，但是可以有效的处理例如函数无论如何返回必须释放某些资源的这种场景。典型的场景就是解锁mutext或者关闭文件。
+
+```go
+// 将文件内容作为字符串返回。
+func Contents(filename string) (string, error) {
+    f, err := os.Open(filename)
+    if err != nil {
+        return "", err
+    }
+    defer f.Close()  // 结束时调用f.Close。
+
+    var result []byte
+    buf := make([]byte, 100)
+    for {
+        n, err := f.Read(buf[0:])
+        result = append(result, buf[0:n]...) // 后面会讲append。
+        if err != nil {
+            if err == io.EOF {
+                break
+            }
+            return "", err  // 如果在这里return，f会被close掉。
+        }
+    }
+    return string(result), nil // 如果在这里return，f会被close掉。
+}
+```
+
+延迟执行类似Close这种方法有两个好处。第一，保证你永远不会忘记关闭文件，比如你过两天又来改这个函数，又增加一处可以return的地方，就很可能忘记关闭文件。第二，文件的关闭和打开都离得很近，这样看上去比在函数最后再执行关闭要更加清晰。
+
+延迟函数的参数（如果函数是一个方法的话也包括它的receiver）是在*defer*声明的时候进行计算的，而不是在调用执行的时候。这样就不用担心后面的计算过程是否会对这里的变量进行修改，这样就意味着一处延迟执行实际上可以延迟多个函数的执行。下面的栗子看上去会有些呆逼。
+
+```go
+for i := 0; i < 5; i++ {
+    defer fmt.Printf("%d ", i)
+}
+```
+
+延迟函数按照LIFO的顺序执行，因此当函数返回时，上面的栗子会输出4 3 2 1 0。另一个看上去更有用的栗子是跟踪函数的执行。我们可以写两个简单的跟踪过程：
+
+```go
+func trace(s string)   { fmt.Println("entering:", s) }
+func untrace(s string) { fmt.Println("leaving:", s) }
+
+// 来看:
+func a() {
+    trace("a")
+    defer untrace("a")
+    // 在这里搞一些小阴谋....
+}
+```
+
+因为延迟函数的参数是在defer声明时计算的，我们可以更好的利用这一点。在开始跟踪的时候就可以给结束跟踪的函数设置好参数。这样：
+
+```go
+func trace(s string) string {
+    fmt.Println("entering:", s)
+    return s
+}
+
+func un(s string) {
+    fmt.Println("leaving:", s)
+}
+
+func a() {
+    defer un(trace("a"))
+    fmt.Println("in a")
+}
+
+func b() {
+    defer un(trace("b"))
+    fmt.Println("in b")
+    a()
+}
+
+func main() {
+    b()
+}
+```
+
+输出
+
+```text
+entering: b
+in b
+entering: a
+in a
+leaving: a
+leaving: b
+```
+
+对于那些在其他语言中习惯了块级别资源管理的程序员来说，defer看上去很奇妙，但它最有趣并且最强大之处就在于它不是块级别的而是函数级别的。在panic和recover的章节中我们会看到更多的相关用法。
+
+## 数据类型
+
+### 用用new
+
+
+
 ## 空标识符
 
 前面在讲[For循环](#For循环)和[Map]()的时候已经提到过空标识符了。
