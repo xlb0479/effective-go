@@ -701,7 +701,25 @@ leaving: b
 
 ### 用用new
 
+Go有两种分配原语，内置的new和make函数。它们干的事儿不一样，可针对的类型也不一样，这里可能会引起混淆，但其中的规则很简单。我们先来看下new。它是一个内置函数，用来分配内存，但是不要被它的名字蒙蔽，它并不会对内存进行*初始化*，而只是做*零值化*。也就是说，new(T)会分配一个T类型的零值存储，然后返回它的地址，也就是一个*T类型的值。用Go的说法就是，它返回了一个新分配的T类型的零值指针。
 
+因为new返回的内存是零值化的，零值化的类型可以不用进一步初始化直接使用，这样在你设计数据结构的时候就可以更好的组织类型。也就是说用户对这个数据结构new了之后就可以立即使用了。比如bytes.buffer的文档中就提到“Buffer的零值就是一个可以立即使用的空缓冲区。”同样，sync.Mutext也没有一个显式的构造函数或者init方法。sync.Mutex的零值直接被定义成了一个未被锁住的mutex。
+
+零值万岁，这个特点还具有传递性。比如下面的声明。
+
+```go
+type SyncedBuffer struct {
+    lock    sync.Mutex
+    buffer  bytes.Buffer
+}
+```
+
+SyncedBuffer类型的值可以在分配或是声明后立即使用。在下面的栗子中，p和v都可以不用进一步调整就直接拿来用。
+
+```go
+p := new(SyncedBuffer)  // type *SyncedBuffer
+var v SyncedBuffer      // type  SyncedBuffer
+```
 
 ## 空标识符
 
