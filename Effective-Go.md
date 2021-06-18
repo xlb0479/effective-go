@@ -25,8 +25,8 @@
 &ensp;&ensp;[构造方法与复合字面量](#构造方法与复合字面量)<br/>
 &ensp;&ensp;[用用make](#用用make)<br/>
 &ensp;&ensp;[数组](#数组)<br/>
-&ensp;&ensp;[切片](#切片)<br/>
-&ensp;&ensp;[二维切片](#二维切片)<br/>
+&ensp;&ensp;[Slice](#Slice)<br/>
+&ensp;&ensp;[二维Slice](#二维Slice)<br/>
 &ensp;&ensp;[Map](#Map)<br/>
 &ensp;&ensp;[Print](#Print)<br/>
 &ensp;&ensp;[Append](#Append)<br/>
@@ -824,6 +824,18 @@ x := Sum(&array)  // 这里显式取地址了
 ```
 
 但这种方式也不是典型的Go。用slice吧。
+
+### Slice
+
+Slice封装了数组，为数据序列提供了更加通用、强大且便捷的接口。除了需要显式多维计算，比如矩阵转换，Go中的大部分数组处理都可以用slice来代替。
+
+Slice持有的是底层数组的引用，如果你把一个slice赋值给另一个，那么它俩引用的是同一个数组。如果一个函数接收一个slice参数，函数内对slice元素的更新就会传播到函数外部，就跟传递数组的指针是一样的。像是Read这种函数，它就可以接收一个slice参数，而不是一个指针加一个计数；slice中的长度可以限制要读取的数据量。下面是os包中File类型的Read方法签名：
+
+```go
+func (f *File) Read(buf []byte) (n int, err error)
+```
+
+这个方法返回读取的字节数量以及一个错误信息。
 
 ## 空标识符
 
