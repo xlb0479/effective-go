@@ -835,7 +835,199 @@ Slice持有的是底层数组的引用，如果你把一个slice赋值给另一�
 func (f *File) Read(buf []byte) (n int, err error)
 ```
 
-这个方法返回读取的字节数量以及一个错误信息。
+这个方法返回读取的字节数量以及一个错误信息。如果要想把数据读到buf的头32个字节中，那就做一下slice（这里用作动词了，是不是很巧妙呀，嘻嘻）。
+
+```go
+    n, err := f.Read(buf[0:32])
+```
+
+这种切片很常用。那我们暂且不谈效率，下面这段代码也能达到同样的效果。
+
+```go
+    var n int
+    var err error
+    for i := 0; i < 32; i++ {
+        nbytes, e := f.Read(buf[i:i+1])  // 读了一字节。
+        n += nbytes
+        if nbytes == 0 || e != nil {
+            err = e
+            break
+        }
+    }
+```
+
+只要不超出底层数组的限制，可以各种修改slice的长度；改完之后赋值给自己就好了。slice的*容量（capacity）*可以用内置函数cap来得到，它返回slice可以接受的最大长度。下面这个函数可以往slice里面追加数据。如果数据超限，slice会被重新分配。最后返回最终的slice。这个函数还彰显了一处发人深省的特点，那就是len和cap函数可以用在slice等于nil的场景中，并且返回0。
+
+```go
+func Append(slice, data []byte) []byte {
+    l := len(slice)
+    if l + len(data) > cap(slice) {  // reallocate
+        // Allocate double what's needed, for future growth.
+        newSlice := make([]byte, (l+len(data))*2)
+        // The copy function is predeclared and works for any slice type.
+        copy(newSlice, slice)
+        slice = newSlice
+    }
+    slice = slice[0:l+len(data)]
+    copy(slice[l:], data)
+    return slice
+}
+```
+
+最后必须要把slice返回，因为尽管Append函数可以修改slice的元素，但slice本身（运行时数据结构，保存了指针、长度以及容量）是值传递的。
+
+slice追加数据的场景太多了，因此我们提供了内置的append函数。要想理解其中的奥妙，我们需要提前准备更多的知识，后面我们会回过头来继续讲这块的东西。
+
+### 二维Slice
+
+Go的数组和slice都是一维的。如果要想闹一个二维的，那就要搞一个数组的数组，或者slice的slice，比如：
+
+```go
+type Transform [3][3]float64  // 三乘三的数组，数组的数组。
+type LinesOfText [][]byte     // 字节slice的slice。
+```
+
+因为slice是变长的，所以内部的每个slice的长度都有可能不一样。这种情况也是很常见的，比如上面的栗子里，LinesOfText的每一行都有自己单独的长度。
+
+```go
+text := LinesOfText{
+	[]byte("Now is the time"),
+	[]byte("for all good gophers"),
+	[]byte("to bring some fun to the party."),
+}
+```
+
+很多时候都需要用到二维slice，比如要按行扫描像素。有两种方法可以实现。一个就是单独分配每一行的slice；另一种是分配一个单独的数组，然后在里面划分每一个slice。具体怎么用还是要看你的场景。如果slice会扩缩，那就要单独分配，避免相互覆盖；如果没有扩缩，那就可以都涵盖在一次分配中。为了便于理解，这里我们大概写了一下。首先是单独分配法：
+
+```go
+// 分配顶层slice。
+picture := make([][]uint8, YSize) // y行。
+// 循环每一行，为每一行单独分配。
+for i := range picture {
+	picture[i] = make([]uint8, XSize)
+}
+```
+
+然后是统一分配再做slice：
+
+```go
+// 分配顶层slice，跟上面一样。
+picture := make([][]uint8, YSize) // y行。
+// 分配一个用来包含所有像素的大slice。
+pixels := make([]uint8, XSize*YSize) // 类型为[]uint8。
+// 循环每一行，基于每次剩余的slice划分新的slice。
+for i := range picture {
+	picture[i], pixels = pixels[:XSize], pixels[XSize:]
+}
+```
+
+### Map
+
+Map可是个方便快捷的数据结构，它能把某种类型的值（*key*）和另外某种类型的值（*element或叫value*）关联起来。key可以是任意的类型，只要能够对它们进行相等比较即可，比如整数、浮点数、复数、字符串、指针、接口（只要其动态类型能进行相等判断即可）、结构体、数组。Slice不能作为map的key，因为它们无法进行相等判断。和slice一样，map也是引用了一个底层的数据结构。如果你把map传给了一个函数，这个函数里又更改了map的内容，那么这种更改也会传播给函数的调用者。
+
+可以用常规的复合字面量语法来创建map，即逗号间隔的键值对形式，所以在初始化的时候就可以很方便的进行构建。
+
+```go
+var timeZone = map[string]int{
+    "UTC":  0*60*60,
+    "EST": -5*60*60,
+    "CST": -6*60*60,
+    "MST": -7*60*60,
+    "PST": -8*60*60,
+}
+```
+
+Map数据的赋值和获取方式也是很讲道理的，跟数组和slice的方式差不多，只不过索引不用非得是整数。
+
+```go
+offset := timeZone["EST"]
+```
+
+如果尝试从map中获取一个不存在的key的值，那就会返回对应类型的零值。比如当map包含的是整数，访问不存在的key，就会返回0。可以用map来构建一个集合，映射的值为bool类型。给集合设置值的时候，对应的value就设置为true，然后就可以用索引的方式来进行测试了。
+
+```go
+attended := map[string]bool{
+    "Ann": true,
+    "Joe": true,
+    ...
+}
+
+if attended[person] { // 如果不存在则返回false。
+    fmt.Println(person, "was at the meeting")
+}
+```
+
+喏，有的时候你需要区分出来到底是key不存在还是真的是零值。到底是不存在才返回的0，还是说本身就是要返回0？你可以用多重赋值的形式来进行判断。
+
+```go
+var seconds int
+var ok bool
+seconds, ok = timeZone[tz]
+```
+
+出于显而易见的理由，这种调用方式被称为“逗ok”。此处，如果tz存在，seconds会被赋予相应的值，ok则是true；如果不存在，seconds会得到一个零值，而ok则是false。这里我们再整合一下，并加好错误提示：
+
+```go
+func offset(tz string) int {
+    if seconds, ok := timeZone[tz]; ok {
+        return seconds
+    }
+    log.Println("unknown time zone:", tz)
+    return 0
+}
+```
+
+如果只是想看看有没有值，而不想真的取值，那就可以用[空标识符](#空标识符)来替换掉值的位置。
+
+```go
+_, present := timeZone[tz]
+```
+
+如果要删除一个条目，可以使用内置的delete函数，参数为map以及要删除的key。即便key已经不存在了，依然可以正常调用。
+
+```go
+delete(timeZone, "PDT")
+```
+
+### Print
+
+Go的格式化输出方式采用了跟C的printf系列函数类似的方法，但是更加强大且通用。这些函数都位于fmt包中，并且开头字母大写：fmt.Printf、fmt.Fprintf、fmt.Sprintf等等。其中的字符串输出（Springf等）函数返回的是一个字符串，而不是填充某个预设的缓冲。
+
+当然也不是总得有什么格式。比如Printf、Fprintf和Sprintf，它们都有对应的另一种函数形式，比如Print和Println。这些函数都不需要格式参数，而是按默认格式进行输出。Println还会给每个参数之间加一个空格，然后再末尾加上换行，而print则只有在两边都没有字符串的情况下才会添加空格。下面的例子中，每一行的输出都是一样的。
+
+```go
+fmt.Printf("Hello %d\n", 23)
+fmt.Fprint(os.Stdout, "Hello ", 23, "\n")
+fmt.Println("Hello", 23)
+fmt.Println(fmt.Sprint("Hello ", 23))
+```
+
+格式化函数fmt.Fprint的第一个参数要求实现io.Writer接口；常见的就是os.Stdout和os.Stderr。
+
+然后，一切开始变得跟C就不太一样了。首先，数字格式，例如%d，不接受符号标识以及长度标识；输出的时候会根据参数的类型来决定这些属性。
+
+```go
+var x uint64 = 1<<64 - 1
+fmt.Printf("%d %x; %d %x\n", x, x, int64(x), int64(x))
+```
+
+输出
+
+```go
+18446744073709551615 ffffffffffffffff; -1 -1
+```
+
+如果你想用默认的格式转换策略，比如整数的浮点格式，你可以用通用的%v格式（即value的缩写）；Print和Println实际上就是在用这种输出格式。这种格式可以输出*任意*的值，甚至是数组、slice、结构体以及map。下面我们输出一下上面定义过的map。
+
+```go
+fmt.Printf("%v\n", timeZone)  // 用fmt.Println(timeZone)也行
+```
+
+输出：
+
+```go
+map[CST:-21600 EST:-18000 MST:-25200 PST:-28800 UTC:0]
+```
 
 ## 空标识符
 
