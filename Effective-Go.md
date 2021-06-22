@@ -1029,6 +1029,176 @@ fmt.Printf("%v\n", timeZone)  // 用fmt.Println(timeZone)也行
 map[CST:-21600 EST:-18000 MST:-25200 PST:-28800 UTC:0]
 ```
 
+对于map数据，Printf及其同门，在输出的时候按key的字母排序。
+
+输出struct类型的时候，%+v可以同时输出字段名，%#v则是按照Go语法进行完整输出。
+
+```go
+type T struct {
+    a int
+    b float64
+    c string
+}
+t := &T{ 7, -2.35, "abc\tdef" }
+fmt.Printf("%v\n", t)
+fmt.Printf("%+v\n", t)
+fmt.Printf("%#v\n", t)
+fmt.Printf("%#v\n", timeZone)
+```
+
+输出
+
+```go
+&{7 -2.35 abc   def}
+&{a:7 b:-2.35 c:abc     def}
+&main.T{a:7, b:-2.35, c:"abc\tdef"}
+map[string]int{"CST":-21600, "EST":-18000, "MST":-25200, "PST":-28800, "UTC":0}
+```
+
+（注意其中的取地址符。）当我们输出string或者[]byte类型的时候，可以用%q输出带双引号的字符串格式。用%#q则是换成了反引号（`）。（%q也可以用在整数和rune上，输出的是单引号的rune常量。）此外，%x可以用在字符串、字节数组、字节slice以及整数上，输出对应的十六进制字符串，如果标记中加入一个空格（% x），则输出的时候会在每个字节中间加一个空格。
+
+另一种常用的标记是%T，它输出对应参数所属的*类型*。
+
+```go
+fmt.Printf("%T\n", timeZone)
+```
+
+输出
+
+```go
+map[string]int
+```
+
+如果你想调整自定义类型的输出格式，可以为该类型添加一个签名为String() string的方法。比如一个简单的类型T，就可以这样。
+
+```go
+func (t *T) String() string {
+    return fmt.Sprintf("%d/%g/%q", t.a, t.b, t.c)
+}
+fmt.Printf("%v\n", t)
+```
+
+输出
+
+```go
+7/-2.35/"abc\tdef"
+```
+
+（如果你想让T的*值*和指针输出一样，那么上面的String方法的接收者必须得是值类型；这里我们用的是指针接收，因为这种形式最高效并且最富个struct类型的使用习惯。详见下面的[指针与值](#指针与值)。）
+
+我们的String方法内可以调用Sprintf，因为输出过程是完全可重入的才能这么调用。这里有一点必须要注意：String方法中调用Sprintf的时候不要出现递归调用String方法的情况。当Sprintf尝试直接输出接收者的值的时候就会出现这种情况，会出现递归调用。这种错误很常见，比如下面这样。
+
+```go
+type MyString string
+
+func (m MyString) String() string {
+    return fmt.Sprintf("MyString=%s", m) // 错误：这里会出现递归。
+}
+```
+
+想改也很简单：把参数转换成基本的字符串类型，它没有String方法。
+
+```go
+type MyString string
+func (m MyString) String() string {
+    return fmt.Sprintf("MyString=%s", string(m)) // 可以可以。
+}
+```
+
+在[初始化](#初始化)一节中会介绍另一种方式。
+
+另一种输出的技巧是将输出的参数传给另一个输出函数。Printf函数的签名中先是格式参数，然后将...interface{}放在最后，即可以接受任意多个参数（任意类型）。
+
+```go
+func Printf(format string, v ...interface{}) (n int, err error) {
+```
+
+在Printf函数内，v类似一个[]interface{}类型的变量，但是又将它传给了另一个变参函数，看着就像是传递了一个参数列表。下面就是我们用到的log.Println方法的实现。它把它的参数直接传给了fmt.Sprintln来完成实际的格式化输出。
+
+```go
+// Println用fmt.Println的风格输出到标准的日志中
+func Println(v ...interface{}) {
+    std.Output(2, fmt.Sprintln(v...))  // Output 需要 (int, string)
+}
+```
+
+调用Sprintln的时候，我们在v后面加了...就是告诉编译器要把v当作一个参数列表；否则只会将v作为一个slice参数传进去。
+
+关于输出还有好多奇技淫巧。详见fmt包的godoc文档。
+
+对了，点点点参数是可以声明具体类型的，比如一个求最小值函数的参数就可以是...int。
+
+```go
+func Min(a ...int) int {
+    min := int(^uint(0) >> 1)  // int最大值
+    for _, i := range a {
+        if i < min {
+            min = i
+        }
+    }
+    return min
+}
+```
+
+### Append
+
+现在我们来填补一下关于内置函数append的空白。append跟我们上面自己定义的Append的签名不一样。它基本上是这个样子：
+
+```go
+func append(slice []T, elements ...T) []T
+```
+
+其中的T是一个占位符，可以是任何类型。Go中是不允许存在这种由调用者决定T的具体类型的函数的。这也就是为什么append是一个内置函数，它需要编译器的支持。
+
+append干的事儿就是把元素追加到slice后面，然后返回结果。这里必须要返回结果，正如我们自己写的那个Append，因为底层数组是有可能发生变化的。下面这个
+
+```go
+x := []int{1,2,3}
+x = append(x, 4, 5, 6)
+fmt.Println(x)
+```
+
+输出[1 2 3 4 5 6] 。这么看的话，append有点像Printf，都是可以接受任意多个参数。
+
+但是我们自己写的Append可以把一个slice追加到另一个slice后面，这里该怎么弄呢？很简单：用点点点参数，就跟我们上面写的调用Output一样。下面的栗子跟上面的输出是一样的。
+
+```go
+x := []int{1,2,3}
+y := []int{4,5,6}
+x = append(x, y...)
+fmt.Println(x)
+```
+
+如果没有点点点则无法通过编译，因为出现了类型错误；y不是int类型。
+
+## 初始化
+
+关于初始化的东西，尽管看上去和C、C++的初始化大差不差，但是它在Go里面可是很强大的。复杂类型可以在初始化过程中完成构建，其中的初始化对象的顺序，甚至是跨越多个不同的包，都可以被正确的处理。
+
+### 常量
+
+Go里面的常量就是……常量，嘿嘿。它们是在编译时创建，即便是在函数中作为局部对象，常量只能是数字、字符（rune）、字符串或者bool类型。由于编译时的限制，用来定义常量的表达式也必须是常量表达式，由编译器来完成计算。比如1<<3就是一个常量表达式，而math.Sin(math.Pi/4)则不是，因为math.Sin这种函数调用只能发生在运行时。
+
+在Go中，可以用iota枚举器来创建枚举常量。因为iota可以作为表达式的一部分，而表达式可以隐式重复执行，这样就可以轻而易举创建一些非常复杂的集合。
+
+```go
+type ByteSize float64
+
+const (
+    _           = iota // 用空标识符来忽略第一个值
+    KB ByteSize = 1 << (10 * iota)
+    MB
+    GB
+    TB
+    PB
+    EB
+    ZB
+    YB
+)
+```
+
+
+
 ## 空标识符
 
 前面在讲[For循环](#For循环)和[Map]()的时候已经提到过空标识符了。
