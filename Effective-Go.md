@@ -1311,6 +1311,11 @@ func (p *ByteSlice) Write(data []byte) (n int, err error) {
 
 顺便说一下，bytes.Buffer的中心思想就是在字节slice上调用Write。
 
+## 接口和其他类型
+
+### 接口
+
+Go的接口用来定义对象的行为：如果它能这么干，那就可以这么用。前面我们已经见识了几个栗子；可以实现String方法来自定义输出，Fprintf则可以将输出内容写入到带有Write方法的对象上。Go里面经常会有只包含一两个方法的接口，接口名字通常也是由方法名来决定，比如Write方法的接口名就是io.Writer。
 
 ## 空标识符
 
