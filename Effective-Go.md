@@ -1197,6 +1197,69 @@ const (
 )
 ```
 
+因为可以将String这种方法加给任意的类型，那就是说这些类型在输出的时候都可以自动的实现格式化。尽管这个方法一般是加给struct类型，但是加给一些标量类型也是有用的，比如ByteSize这种浮点类型。
+
+```go
+func (b ByteSize) String() string {
+    switch {
+    case b >= YB:
+        return fmt.Sprintf("%.2fYB", b/YB)
+    case b >= ZB:
+        return fmt.Sprintf("%.2fZB", b/ZB)
+    case b >= EB:
+        return fmt.Sprintf("%.2fEB", b/EB)
+    case b >= PB:
+        return fmt.Sprintf("%.2fPB", b/PB)
+    case b >= TB:
+        return fmt.Sprintf("%.2fTB", b/TB)
+    case b >= GB:
+        return fmt.Sprintf("%.2fGB", b/GB)
+    case b >= MB:
+        return fmt.Sprintf("%.2fMB", b/MB)
+    case b >= KB:
+        return fmt.Sprintf("%.2fKB", b/KB)
+    }
+    return fmt.Sprintf("%.2fB", b)
+}
+```
+
+直接输出YB，那就是输出1.00YB，ByteSize(1e13)则会输出9.09TB。
+
+这里之所以用Sprintf来实现ByteSize的String方法（避免无限递归），不光是做了转换的原因，还有就是它调用Sprintf的时候用了%f，而它不是字符串格式：Sprintf只有在需要字符串的时候才会调用String方法，而这里它需要的是一个浮点值。
+
+### 变量
+
+变量也可以像常量内种初始化，但是初始化器可以是一个一般的表达式，在运行时计算。
+
+```go
+var (
+    home   = os.Getenv("HOME")
+    user   = os.Getenv("USER")
+    gopath = os.Getenv("GOPATH")
+)
+```
+
+### init函数
+
+最后，每一个源文件中都可以定义无参的init函数，用来初始化它需要的各种状态。（实际上每个文件可以有多个init函数。）我们说最后，是因为它真的是最后：init函数要等到该包中所有的变量完成初始化后才会被调用，而在这之前，还要等所有被导入的包完成初始化。
+
+初始化无法表达成声明（我去，这句没明白啥意思），init函数一般是用来确认或者调整程序开始执行前的状态是否正确。
+
+```go
+func init() {
+    if user == "" {
+        log.Fatal("$USER not set")
+    }
+    if home == "" {
+        home = "/home/" + user
+    }
+    if gopath == "" {
+        gopath = home + "/go"
+    }
+    // 可以用命令行的-gopath选项来覆盖gopath的值。
+    flag.StringVar(&gopath, "gopath", gopath, "override default GOPATH")
+}
+```
 
 
 ## 空标识符
