@@ -1261,6 +1261,56 @@ func init() {
 }
 ```
 
+## 方法
+
+### 指针与值
+
+正如我们前面对ByteSize的所作所为，可以为任意的（除了指针和接口）命名类型定义方法；接收者不是非得是struct。
+
+上面我们讨论slice的时候，我们写了一个Append函数。我们可以把它定义成slice的一个方法。首先我们需要声明一个命名类型才能把方法绑上去，然后我们把方法的接收者改成对应的类型。
+
+```go
+type ByteSlice []byte
+
+func (slice ByteSlice) Append(data []byte) []byte {
+    // 这里跟之前写的Append函数体一样就行了。
+}
+```
+
+这里我们仍然需要返回更新后的slice。我们可以重构一下，避免这种尴尬，把接收者改成ByteSlice的*指针*，这样方法就可以修改调用者的slice了。
+
+```go
+func (p *ByteSlice) Append(data []byte) {
+    slice := *p
+    // 这里跟之前的一样，只不过不用返回了。
+    *p = slice
+}
+```
+
+我们还可以改的更好。我们可以按照标准的Write方法风格进一步调整，这样，
+
+```go
+func (p *ByteSlice) Write(data []byte) (n int, err error) {
+    slice := *p
+    // 这里还是不变。
+    *p = slice
+    return len(data), nil
+}
+```
+
+这样的话，*ByteSlice就满足了标准接口io.Writer，用起来就方便多了。比如，我们可以把数据输出到里面。
+
+```go
+    var b ByteSlice
+    fmt.Fprintf(&b, "This hour has %d days\n", 7)
+```
+
+我们传的是ByteSlice的地址，因为只有*ByteSlice才满足io.Writer接口。选择指针还是值作为接收者，这里的规则是，值方法可以被指针和值调用，而指针方法只能被指针调用。
+
+这是因为指针方法可以修改它的调用者；如果用值来调用，那方法的接收者实际上是该值的一个副本，因此所有的改动都会被丢弃。因此在语言层面上就避免了这种错误。这里我们特意提供了一些语法糖。如果值是可以取地址的，那么语言本身知道这是一种常见的情况，用值调用了指针方法，它会自动添加取地址操作符。在上例中，变量b是可以取地址的，因此我们可以直接用b.Write来调用它的Write方法。编译器会替我们把它重写成(&b).Write。
+
+顺便说一下，bytes.Buffer的中心思想就是在字节slice上调用Write。
+
 
 ## 空标识符
 
