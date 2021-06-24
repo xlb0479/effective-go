@@ -40,7 +40,7 @@
 &ensp;&ensp;[接口](#接口)<br/>
 &ensp;&ensp;[类型转换](#类型转换)<br/>
 &ensp;&ensp;[接口转换与类型断言](#接口转换与类型断言)<br/>
-&ensp;&ensp;[](#)<br/>
+&ensp;&ensp;[泛型](#泛型)<br/>
 &ensp;&ensp;[接口和方法](#接口和方法)<br/>
 [空标识符](#空标识符)<br/>
 &ensp;&ensp;[多变量赋值中的空标识符](#多变量赋值中的空标识符)<br/>
@@ -1316,6 +1316,135 @@ func (p *ByteSlice) Write(data []byte) (n int, err error) {
 ### 接口
 
 Go的接口用来定义对象的行为：如果它能这么干，那就可以这么用。前面我们已经见识了几个栗子；可以实现String方法来自定义输出，Fprintf则可以将输出内容写入到带有Write方法的对象上。Go里面经常会有只包含一两个方法的接口，接口名字通常也是由方法名来决定，比如Write方法的接口名就是io.Writer。
+
+一个类型可以实现多个接口。比如一个集合如果实现了sort.Interface，那就可以用sort包中的工具进行排序，其中包含Len()、Less(i, j int) bool、以及Swap(i, j int)，而且还可以加一个自定义的格式化输出函数。下面特意搞了一个戏精附体的Sequence，满足以上所有需要。
+
+```go
+type Sequence []int
+
+// sort.Interface需要的方法。
+func (s Sequence) Len() int {
+    return len(s)
+}
+func (s Sequence) Less(i, j int) bool {
+    return s[i] < s[j]
+}
+func (s Sequence) Swap(i, j int) {
+    s[i], s[j] = s[j], s[i]
+}
+
+// 返回一个Sequence副本。
+func (s Sequence) Copy() Sequence {
+    copy := make(Sequence, 0, len(s))
+    return append(copy, s...)
+}
+
+// 格式化输出——排序后输出。
+func (s Sequence) String() string {
+    s = s.Copy() // 别动已有的，先搞个副本出来。
+    sort.Sort(s)
+    str := "["
+    for i, elem := range s { // 这里是O(N²)；后面我们会优化。
+        if i > 0 {
+            str += " "
+        }
+        str += fmt.Sprint(elem)
+    }
+    return str + "]"
+}
+```
+
+### 类型转换
+
+Sequence的String方法覆盖了Sprint原本对slice的输出方式。（但实现成了O(N²)，效率太差。）我们可以把任务分摊一下（同时也是提高效率），我们在调用Sprint前把Sequence转换成一个普通的[]int。
+
+```go
+func (s Sequence) String() string {
+    s = s.Copy()
+    sort.Sort(s)
+    return fmt.Sprint([]int(s))
+}
+```
+
+该方法同时也展示了另一种在String方法中安全调用Sprintf的栗子。如果我们不看名字的话，实际上两种类型（Sequence和[]int）是同一种类型，在它们之间做转换也是可以的。转换本省并不会创建新的值出来，它只是临时性的让当前值扮演了一个新的类型。（其他的一些合法转换则会创建新的值，比如整数转浮点数。）
+
+在Go中经常会将一个表达式的类型转换成另一个，从而访问到不通的方法。比如我们可以用sort.IntSlice来简化上面的栗子：
+
+```go
+type Sequence []int
+
+// 格式化输出——排序后输出。
+func (s Sequence) String() string {
+    s = s.Copy()
+    sort.IntSlice(s).Sort()
+    return fmt.Sprint([]int(s))
+}
+```
+
+现在我们就不用让Sequence实现多个接口了（排序和输出接口），因为我们可以将数据转换成不通的类型（Sequence、sort.IntSlice以及[]int），每种类型都可以承担一部分工作。实际开发中可能并不常用，但的确高效。
+
+### 接口转换与类型断言
+
+[类型swtich](#类型Switch)也是转换的一种形式：它接收一个接口，然后在每个case中转换成对应的类型。下面是一个简化版的栗子，展示了fmt.Printf是如何用类型switch把一个值转换成字符串的。如果它已经是一个字符串了，那我们要的就是接口持有的真实的字符串，如果它有一个String方法，那我们要的就是调用该方法返回的结果。
+
+```go
+type Stringer interface {
+    String() string
+}
+
+var value interface{} // 调用者提供的value。
+switch str := value.(type) {
+case string:
+    return str
+case Stringer:
+    return str.String()
+}
+```
+
+第一个case拿到了具体的值；第二个case把当前接口转换成了另一个接口。这种类型混用的方式是完全ok的。
+
+如果我们只关心某一种类型怎么办？假如我们现在知道这个值就是一个字符串，我们想得到它该怎么弄？可以用单case类型swtich，但也可以使用*类型断言*。类型断言需要一个接口值，然后按照显式声明的类型把里面的值拽出来。这种语法借用了类型switch开头的部分，但用的是显式类型，而不是一个type关键字：
+
+```go
+value.(typeName)
+```
+
+其结果就是指定静态类型typeName的一个新值。这个新的类型必须要么是接口真实对应的类型，要么是这个值可以进行正确转换的一个类型。比如我们已经知道value就是个字符串，想把里面的值拽出来，那就这样：
+
+```go
+str := value.(string)
+```
+
+但如果真实情况并非我们所想，value没有字符串，程序就会崩溃，报出运行时错误。要想提高健壮性，我们可以用“逗OK”语法来保护一下，判断value到底是不是字符串：
+
+```go
+str, ok := value.(string)
+if ok {
+    fmt.Printf("string value is: %q\n", str)
+} else {
+    fmt.Printf("value is not a string\n")
+}
+```
+
+如果类型断言失败，str依然存在，并且类型是字符串，但是个零值字符串，空串。
+
+为了诠释它的作用，我们把上面的类型switch改成了下面这种if-else语句。
+
+```go
+if str, ok := value.(string); ok {
+    return str
+} else if str, ok := value.(Stringer); ok {
+    return str.String()
+}
+```
+
+### 泛型
+
+如果一个类型只需要实现一个接口，并且除了接口定义的方法外没有其他需要导出的方法，那这个类型本身也就没必要导出了。只导出接口就行，这样就很清晰的表明除了接口声明的东西以外没有什么其他的东西了。这样还可以避免在每个接口的实现方法上都加一段重复的注释文档。
+
+此时，构造方法要返回的就应该是接口值而不是具体的实现类型。比如在哈希库中，crc32.NewIEEE和adler32.New返回的都是hash.Hash32这个接口类型。如果要在Go程序中把CRC-32算法改成Adler-32算法，只需要改一下调用的构造方法即可；修改算法并不会影响已有的代码。
+
+
 
 ## 空标识符
 
