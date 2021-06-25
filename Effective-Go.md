@@ -1444,7 +1444,134 @@ if str, ok := value.(string); ok {
 
 此时，构造方法要返回的就应该是接口值而不是具体的实现类型。比如在哈希库中，crc32.NewIEEE和adler32.New返回的都是hash.Hash32这个接口类型。如果要在Go程序中把CRC-32算法改成Adler-32算法，只需要改一下调用的构造方法即可；修改算法并不会影响已有的代码。
 
+同样的方式在crypto包中也经常出现，使得分组密码和流密码既有关联又能加以区分。crypto/cipher包的Block接口定义了一个分组密码的行为，它只提供对一组密码进行加密。然后，对比bufio包可以发现，实现了这个接口的密码可以用来构建流密码，也就是Stream接口定义的行为，而这个过程中并不用操心底层分组密码的实现方式。
 
+crypto/cipher接口：
+
+```go
+type Block interface {
+    BlockSize() int
+    Encrypt(dst, src []byte)
+    Decrypt(dst, src []byte)
+}
+
+type Stream interface {
+    XORKeyStream(dst, src []byte)
+}
+```
+
+下面定义了计数模式（CTR）流，它将一个分组密码转换成了一个流密码；注意这里分组密码的细节被抽象出去了：
+
+```go
+// NewCTR returns a Stream that encrypts/decrypts using the given Block in
+// counter mode. The length of iv must be the same as the Block's block size.
+func NewCTR(block Block, iv []byte) Stream
+```
+
+NewCTR的使用场景并不受特定加密算法和数据源的限制，只要实现了Block和Stream接口即可。因为它返回的是接口值，因此变换CTR加密模式只会产生小范围的影响。到时候肯定要改构造方法，但是其他的部分因为用的都是Stream，所以都是无感知的。
+
+### 接口和方法
+
+基本上啥玩意都会有几个方法，所以基本上啥玩意都能满足某个接口。http包中就有这么个栗子，它定义了一个Handler接口。所有实现了Handler的对象都可以用来处理HTTP请求。
+
+```go
+type Handler interface {
+    ServeHTTP(ResponseWriter, *Request)
+}
+```
+
+ResponseWriter也是个接口，提供了用来为客户端生成返回结果的方法。比如Write方法，这样，能用io.Writer的地方就能用http.ResponseWriter。Request是个struct，包含了客户端请求被解析后的形式。
+
+我们讲的简单一点，不考虑POST，假设HTTP请求都是GET；这种简化不影响handler的构造方式。下面的栗子做了一个PV统计。
+
+```go
+// 简易计数服务。
+type Counter struct {
+    n int
+}
+
+func (ctr *Counter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+    ctr.n++
+    fmt.Fprintf(w, "counter = %d\n", ctr.n)
+}
+```
+
+（跟上思路，想想为什么Fprintf可以用http.ResponseWriter进行输出。）在真正的服务中，访问ctr.n是要做并发安全的。这部分知识可以去看sync和atomic包。
+
+为了完整一点，下面把这个服务关联到一个URL路径上。
+
+```go
+import "net/http"
+...
+ctr := new(Counter)
+http.Handle("/counter", ctr)
+```
+
+那么为什么要把Counter实现成一个struct呢？用整数就好了呀。（接收者得是指针，这样做的更新才能对调用者可见。）
+
+```go
+// 简易计数服务。
+type Counter int
+
+func (ctr *Counter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+    *ctr++
+    fmt.Fprintf(w, "counter = %d\n", *ctr)
+}
+```
+
+如果页面被访问的时候需要通知到一些内部状态该怎么办？那就绑一个channel。
+
+```go
+// 每次访问都会给channel发一个通知。
+// （channel可能需要加缓冲。）
+type Chan chan *http.Request
+
+func (ch Chan) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+    ch <- req
+    fmt.Fprint(w, "notification sent")
+}
+```
+
+最后，假设我们想把启动服务进程时设置的命令行参数展示在/args页面上。很简单，写一个函数输出参数即可。
+
+```go
+func ArgServer() {
+    fmt.Println(os.Args)
+}
+```
+
+然后怎么变成一个HTTP服务捏？我们可以把ArgServer弄成某个类型的方法，可以不去关心类型具体的值，但是还有更简单的方法。因为除了指针和接口，我们还可以给其他各种类型加上方法，没错，我们还可以给函数定义一个方法。http包里就包含这样的代码：
+
+```go
+// HandlerFunc类型是一个适配器，可以让普通的函数来作为HTTP处理器。比如函数f具有匹配的签名，那么HandlerFunc(f)就是一个可以调用f的处理器对象。
+type HandlerFunc func(ResponseWriter, *Request)
+
+// ServeHTTP调用f(w, req)。
+func (f HandlerFunc) ServeHTTP(w ResponseWriter, req *Request) {
+    f(w, req)
+}
+```
+
+这样的HandlerFunc就是一个有ServeHTTP方法的类型，所以对应的值就可以用来处理HTTP请求。来看下这个方法的实现：接收者是一个函数，f，然后方法会调用f。看上去可能有点奇怪，但是也见怪不怪了，比如上面的栗子中，接收者是一个channel然后让方法往channel上发东西。
+
+现在我们要把ArgServer改成一个HTTP服务，先调整它的签名。
+
+```go
+// 参数服务。
+func ArgServer(w http.ResponseWriter, req *http.Request) {
+    fmt.Fprintln(w, os.Args)
+}
+```
+
+ArgServer现在和HandlerFunc的签名就一致了，此时就可以转换成这种类型然后访问它的方法了，就跟我们之前把Sequence转成IntSlice然后访问IntSlice.Sort一样。最后要跑起来就是这样：
+
+```go
+http.Handle("/args", http.HandlerFunc(ArgServer))
+```
+
+当访问/args页面的时候，部署在这个页面的处理器的值是ArgServer，类型是HandlerFunc。HTTP服务会调用该类型的ServeHTTP方法，并以ArgServer作为接收者，然后它会反过来调用ArgServer（通过HandlerFunc.ServeHTTP内部的f(w, req)来调用）。然后参数就展示出来了。
+
+在本节中，我们用struct、整数、channel、函数都实现了HTTP服务，这一切都是因为接口的本质就是一组方法，（几乎）任何类型都可以定义这些方法。
 
 ## 空标识符
 
