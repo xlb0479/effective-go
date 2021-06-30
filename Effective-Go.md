@@ -47,7 +47,7 @@
 &ensp;&ensp;[无用的import和变量](#无用的import和变量)<br/>
 &ensp;&ensp;[利用import的副作用](#利用import的副作用)<br/>
 &ensp;&ensp;[接口检查](#接口检查)<br/>
-[嵌入](#嵌入)<br/>
+[内嵌](#内嵌)<br/>
 [并发](#并发)<br/>
 &ensp;&ensp;[利用通信来共享数据](#利用通信来共享数据)<br/>
 &ensp;&ensp;[Go协程](#Go协程)<br/>
@@ -1650,3 +1650,132 @@ func main() {
 ```
 
 习惯上我们要把对无用导入的抑制紧跟在导入声明的后面而且要加上注释，这样可以快速定位，并且留下提示记得清理。
+
+### 利用import的副作用
+
+上面我们提到的无用的导入，比如imt和io，最终还是要被用到，或者删掉：这些地方的空标识符往往意味着一些要做但还未做的事情。但有的时候导入一个包可能只是为了享受它带来的额外好处，而不是直接的加以利用。比如在执行init函数的时候，net/http/pprof包会注册一些能够提供调试信息的HTTP处理器。它还包括一个导出的API，但大部分客户端只需要这个处理器注册上就可以了，然后从web页面访问它的数据。如果只是为了享受这些额外的小福利，那就可以使用空标识符：
+
+```go
+import _ "net/http/pprof"
+```
+
+这样就可以表明此处导入是为了利用它的副作用，因为没有什么其他地方需要用到它：此处，它没名字。（如果加了名字，而我们又不用，那编译就报错了。）
+
+### 接口检查
+
+我们上面讲[接口和其他类型](#接口和其他类型)的时候提到，类型不需要显式声明它所实现的接口。类型只需要实现接口的方法即可。实际上大部分接口转换都是静态的，因此会在编译时进行检查。比如把\*os.File传给了一个需要io.Reader的函数，编译就会报错，除非\*os.File实现了io.Reader接口。
+
+但也有一些接口检查是发生在运行时的。比如encoding/json包中的Marshaler接口。当一个JSON编码器收到一个实现该接口的值时，编码器要调用它的序列化方法来把它转成一个JSON，而不是用标准的类型转换。编码器会使用[类型断言](#接口转换与类型断言)在运行时进行检查：
+
+```go
+if _, ok := val.(json.Marshaler); ok {
+    fmt.Printf("value %v of type %T implements json.Marshaler\n", val, val)
+}
+```
+
+这个例子就是说有的时候还是要确保类型的确实现了某个接口。如果一个类型——比如json.RawMessage——需要自定义的JSON格式，那它就要实现json.Marshaler，但是没有哪种静态转换能让编译器来对它进行验证。如果类型恰巧无法满足接口定义，JSON编码器仍能正常工作，但是不会使用自定义的实现方式。要保证实现正确，可以用空标识符做一个全局声明：
+
+```go
+var _ json.Marshaler = (*RawMessage)(nil)
+```
+
+这样，这个赋值语句就要将\*RawMessage转成Marshaler，\*RawMessage就要实现Marshaler，而且这件事会在编译时进行检查。一旦json.Marshaler接口发生变化，那这个包就无法通过编译，我们就会知道此时需要对实现进行更新了。
+
+## 内嵌
+
+Go并没有提供那种典型的基于类型驱动的继承模型，但是它依然有能力“借用”一部分实现，那就是在struct或接口中使用*内嵌*。
+
+接口内嵌很简单。我们上面提到过io.Reader和io.Writer；下面是它们的定义。
+
+```go
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+type Writer interface {
+    Write(p []byte) (n int, err error)
+}
+```
+
+io包还导出了一些其他的接口，它们所定义的对象可以实现多个此类方法。比如有一个io.ReadWriter，这个接口包含了Read和Write。在io.ReadWriter中我们可以把这两个方法都加进去，但是更简单且聪明的方式是将这两个接口进行内嵌，形成一个新的接口，比如这样：
+
+```go
+// ReadWriter接口组合了Reader和Writer接口。
+type ReadWriter interface {
+    Reader
+    Writer
+}
+```
+
+见字如面：一个ReadWriter可以把Reader*和*Writer的活儿都干了；它是二者的结合。接口中只能内嵌接口。
+
+同样的道理，struct也一样，但拥有更加深远的影响。bufio包中包含两个struct类型，bufio.Reader和bufio.Writer，分别实现了io包中对应的接口。bufio包中还实现了一个可缓冲的读写器，也就是通过内嵌组合了Reader和Writer：在struct中罗列它们的类型，但不用给出字段的名字。
+
+```go
+// ReadWriter保存了Reader和Writer的指针。
+// 它实现了io.ReadWriter。
+type ReadWriter struct {
+    *Reader  // *bufio.Reader
+    *Writer  // *bufio.Writer
+}
+```
+
+内嵌的元素是struct的指针，因此在使用前必须要初始化成有效的struct类型的指针。我们可以试着把ReadWriter改成
+
+```go
+type ReadWriter struct {
+    reader *Reader
+    writer *Writer
+}
+```
+
+但此时为了满足io接口的定义我们要提供字段对应的方法，我们还需要对方法进行转发，比如：
+
+```go
+func (rw *ReadWriter) Read(p []byte) (n int, err error) {
+    return rw.reader.Read(p)
+}
+```
+
+如果直接使用struct内嵌，我们就不需要这种累赘的代码了。内嵌类型的方法开箱即用，就是说bufio.ReadWriter不光有bufio.Reader和bufio.Writer的方法，它还同时满足了三个接口：io.Reader、io.Writer、io.ReadWriter。
+
+内嵌和继承存在一种非常重要的不同。当我们内嵌类型时，内嵌类型的方法变成了外部类型的方法，但它们被调用的时候，实际的接收者却是内嵌类型，而不是外部类型。在上面的栗子中，当调用bufio.ReadWriter的Read方法时，它的效果跟我们写的使用方法转发的栗子完全一样；接收者是ReadWriter中的reader字段，而不是ReadWriter本身。
+
+内嵌还可以简化你的代码。下面的栗子包含一个内嵌字段和一个普通的命名字段。
+
+```go
+type Job struct {
+    Command string
+    *log.Logger
+}
+```
+
+Job类型现在有了Print、Printf、Println以及\*log.Logger的其他方法。我们可以给Logger加个字段名，但真的没必要。现在，当初始化完成后，我们可以用Job进行日志操作：
+
+```go
+job.Println("starting now...")
+```
+
+Logger也是Job的一个普通字段，因此我们可以在Job的构造方法中照常对它进行初始化，比如，
+
+```go
+func NewJob(command string, logger *log.Logger) *Job {
+    return &Job{command, logger}
+}
+```
+
+或者直接用字面量，
+
+```go
+job := &Job{command, log.New(os.Stderr, "Job: ", log.Ldate)}
+```
+
+如果我们想直接引用内嵌的字段，那我们可以忽略它的包名，直接用类型名当字段名，就像ReadWriter结构体中的Read方法一样。比如这里我们要访问一个Job类型的变量job中的\*log.Logger，我们可以直接用job.Logger，当我们想优化Logger的方法时就变得很方便了。
+
+```go
+func (job *Job) Printf(format string, args ...interface{}) {
+    job.Logger.Printf("%q: %s", job.Command, fmt.Sprintf(format, args...))
+}
+```
+
+类型内嵌带来了命名冲突的风险，但解决的办法也很简单。
