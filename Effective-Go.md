@@ -51,7 +51,7 @@
 [并发](#并发)<br/>
 &ensp;&ensp;[利用通信来共享数据](#利用通信来共享数据)<br/>
 &ensp;&ensp;[Go协程](#Go协程)<br/>
-&ensp;&ensp;[Channel](#Channel)<br/>
+&ensp;&ensp;[Channel](#香奈儿)<br/>
 &ensp;&ensp;[Channel嵌套](#Channel嵌套)<br/>
 &ensp;&ensp;[并行](#并行)<br/>
 &ensp;&ensp;[缓冲泄露](#缓冲泄露)<br/>
@@ -1824,3 +1824,66 @@ func Announce(message string, delay time.Duration) {
 在Go中，字面量函数即闭包：它的实现保证了只要函数还在，那么它所引用的变量就一直存在。
 
 这些例子都不太实用，因为我们不知道函数什么时候执行完了。所以，我们需要香奈儿。
+
+### 香奈儿
+
+和map类似，香奈儿也要用make来建，返回的结果也是对底层数据结构的引用。如果提供了额外的整数参数，则作为香奈儿的缓冲大小。默认是零，也就是无缓冲或者叫同步香奈儿。
+
+```go
+ci := make(chan int)            // 无缓冲的整数香奈儿
+cj := make(chan int, 0)         // 无缓冲的整数香奈儿
+cs := make(chan *os.File, 100)  // File指针的缓冲香奈儿
+```
+
+无缓冲的香奈儿将通信——值的交换——和同步结合起来——保证两边的计算（Go协程）处于一个已知的状态。
+
+香奈儿的场景也比较多。我们先找一个看一下。上一节我们在后台运行了一个排序。香奈儿可以让当前的Go协程等待排序完成。
+
+```go
+c := make(chan int)  // 分配一个香奈儿。
+// 在一个Go写成中开始排序；结束后，给香奈儿发个信号。
+go func() {
+    list.Sort()
+    c <- 1  // 发个信号；具体发的啥无所谓。
+}()
+doSomethingForAWhile()
+<-c   // 等待排序结束；丢弃发过来的值。
+```
+
+接收方会一直阻塞在那里，直到有数据过来。如果香奈儿时无缓冲的，发送方会一直阻塞，直到数据被接收方拿走。如果香奈儿有缓冲，发送方只需要将数据复制到缓冲中即可；如果缓冲满了，那就要等接收方拿走里面的一个值。
+
+带缓冲的香奈儿可以当信号量使，比如用来限制吞吐量。下面的栗子中，过来的请求会传给handle，它要发一个值给香奈儿，然后处理请求，然后再从香奈儿中拿一个值，让“信号量”准备好为下一个消费者提供服务。香奈儿缓冲的容量决定了能够同时执行多少个process调用。
+
+```go
+var sem = make(chan int, MaxOutstanding)
+
+func handle(r *Request) {
+    sem <- 1    // 排出才能继续塞。
+    process(r)  // 可能要执行很久哦。
+    <-sem       // 完成；下一个过来吧。
+}
+
+func Serve(queue chan *Request) {
+    for {
+        req := <-queue
+        go handle(req)  // 不用等。
+    }
+}
+```
+
+当有MaxOutstanding个handler在执行process函数时，此时再想往香奈儿缓冲中发消息就会被阻塞，因为已经满了，直到其中一个handler完成它的工作并从缓冲中取出一个消息。
+
+但是这种设计有个问题：Serve函数为每次请求都创建了一个Go协程，即便它们之中同一时间只能有MaxOutstanding个可以继续执行。结果就是如果请求来的太快，这个程序可能要无限制的消耗资源。我们可以改一下Serve，让它守住Go协程的创建时机。下面的解决办法很直白，但是它也有bug，我们后面会解决：
+
+```go
+func Serve(queue chan *Request) {
+    for req := range queue {
+        sem <- 1
+        go func() {
+            process(req) // 有bug；后面解释。
+            <-sem
+        }()
+    }
+}
+```
+
