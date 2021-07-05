@@ -52,7 +52,7 @@
 &ensp;&ensp;[利用通信来共享数据](#利用通信来共享数据)<br/>
 &ensp;&ensp;[Go协程](#Go协程)<br/>
 &ensp;&ensp;[Channel](#香奈儿)<br/>
-&ensp;&ensp;[Channel嵌套](#Channel嵌套)<br/>
+&ensp;&ensp;[Channel嵌套](#香奈儿嵌套)<br/>
 &ensp;&ensp;[并行](#并行)<br/>
 &ensp;&ensp;[缓冲泄露](#缓冲泄露)<br/>
 [错误](#错误)<br/>
@@ -1887,3 +1887,150 @@ func Serve(queue chan *Request) {
 }
 ```
 
+问题就在于Go中的for循环，每次迭代都会重用循环变量，所以req会被所有的Go协程共享。这并非我所愿也。我们要确保每个Go协程中的req是唯一的。一种办法是，将req的值作为Go协程闭包的参数传进去：
+
+```go
+func Serve(queue chan *Request) {
+    for req := range queue {
+        sem <- 1
+        go func(req *Request) {
+            process(req)
+            <-sem
+        }(req)
+    }
+}
+```
+
+和之前的栗子对比一下，注意闭包的声明和运行方式。另一种处理方式是起一个同名的变量，比如：
+
+```go
+func Serve(queue chan *Request) {
+    for req := range queue {
+        req := req // 为协程创建一个req的新实例。
+        sem <- 1
+        go func() {
+            process(req)
+            <-sem
+        }()
+    }
+}
+```
+
+这么写看着有点别扭
+
+```go
+req := req
+```
+
+但这的确合法，而且是Go中的惯用伎俩。同样的名字可以让你得到一个全新版本的变量，它刻意覆盖了循环变量，保证每个Go协程中变量的唯一性。
+
+回到编写服务的问题上来，另一种资源管理的方式是启动固定数量的handle协程，且全部处于从请求香奈儿中读取数据的状态。Go协程的数量限制了同时进行process的数量。这个版本的Serve函数同时还监听着一个负责通知退出的香奈儿；程序启动后，它就会一直阻塞在这个香奈儿的读取上。
+
+```go
+func handle(queue chan *Request) {
+    for r := range queue {
+        process(r)
+    }
+}
+
+func Serve(clientRequests chan *Request, quit chan bool) {
+    // 启动处理器
+    for i := 0; i < MaxOutstanding; i++ {
+        go handle(clientRequests)
+    }
+    <-quit  // 等待退出。
+}
+```
+
+### 香奈儿嵌套
+
+Go里面很重要的一点就是香奈儿是一等公民，可以跟其他的东西一样进行分配和传递。利用这一点就可以进行安全的并行多路分解编程。
+
+再前面的栗子中，对于一个请求，我们已经把handle优化得可以的了，但是我们还没有定义什么是请求。如果请求中包含了一个可以用来响应的香奈儿，每个客户端就可以提供它自己的回复路径。下面我们给出Request类型的定义。
+
+```go
+type Request struct {
+    args        []int
+    f           func([]int) int
+    resultChan  chan int
+}
+```
+
+客户端提供了一个函数以及对应的参数，还有一个用来接收响应的香奈儿。
+
+```go
+func sum(a []int) (s int) {
+    for _, v := range a {
+        s += v
+    }
+    return
+}
+
+request := &Request{[]int{3, 4, 5}, sum, make(chan int)}
+// 发送请求
+clientRequests <- request
+// 等待响应。
+fmt.Printf("answer: %d\n", <-request.resultChan)
+```
+
+服务端我们只需要改一下handler函数。
+
+```go
+func handle(queue chan *Request) {
+    for req := range queue {
+        req.resultChan <- req.f(req.args)
+    }
+}
+```
+
+这些代码要想真的派上用场，当然还要做很多调整，但这里给出的是一个框架，它可以用来做可受限的、并行的、非阻塞的RPC程序，而且明面儿上看不到互斥锁。
+
+### 并行
+
+这些概念的另一种利用方式就是在多个CPU上进行并行计算。如果一项计算能够分解成可单独执行的片段，那就可以并行化，每个片段执行完后通过香奈儿来发出信号。
+
+假设我们现在要对一个向量进行一个复杂的计算，对于向量中的每个元素的计算结果是相互独立的，这样就是一个理想化的用例了。
+
+```go
+type Vector []float64
+
+// 对v[i], v[i+1] ... v[n-1]分别进行计算。
+func (v Vector) DoSome(i, n int, u Vector, c chan int) {
+    for ; i < n; i++ {
+        v[i] += u.Op(v[i])
+    }
+    c <- 1    // 通知本次计算完成
+}
+```
+
+我们在一个循环中运行这些片段，每个片段分配到一个CPU上。它们的执行顺序并不确定，但这无所谓；在启动所有的Go协程后，我们只需要将香奈儿不断抽取，对结束信号进行计数即可。
+
+```go
+const numCPU = 4 // CPU核数
+
+func (v Vector) DoAll(u Vector) {
+    c := make(chan int, numCPU)  // 缓冲虽是可选，但在这里是有用处的。
+    for i := 0; i < numCPU; i++ {
+        go v.DoSome(i*len(v)/numCPU, (i+1)*len(v)/numCPU, u, c)
+    }
+    // 抽干香奈儿。
+    for i := 0; i < numCPU; i++ {
+        <-c    // 等待其中一个任务完成
+    }
+    // 全完了。
+}
+```
+
+其实我们不用固定numCPU的值，我们可以询问运行时来得到合适的值。runtime.NumCPU可以返回当前机器的硬件CPU核数，所以我们可以
+
+```go
+var numCPU = runtime.NumCPU()
+```
+
+这里还有一个函数是runtime.GOMAXPROCS，可以返回（或设置）由用户设定的Go程序可以用来同时运行的核心数。它的默认值等于runtime.NumCPU，但是可以用类似的环境变量来覆盖这个值，或者直接用一个正数作为参数来调用这个函数。如果传零，那就代表是要查询。所以如果我们要遵守用户的设定，那就应该这么写
+
+```go
+var numCPU = runtime.GOMAXPROCS(0)
+```
+
+注意并发——将程序分成独立执行的部分——和并行——让计算高效的并行运行在多个CPU上，不要弄混了。尽管Go的并发特性有助于进行并行编程，但Go是并发语言，而不是并行语言，Go的这种模型并不适用于所有并行问题。关于这个问题的讨论，可以看看[这篇文章](https://blog.golang.org/waza-talk)。
