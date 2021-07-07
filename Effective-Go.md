@@ -54,7 +54,7 @@
 &ensp;&ensp;[Channel](#香奈儿)<br/>
 &ensp;&ensp;[Channel嵌套](#香奈儿嵌套)<br/>
 &ensp;&ensp;[并行](#并行)<br/>
-&ensp;&ensp;[缓冲泄露](#缓冲泄露)<br/>
+&ensp;&ensp;[缓冲漏桶](#缓冲漏桶)<br/>
 [错误](#错误)<br/>
 &ensp;&ensp;[Panic](#Panic)<br/>
 &ensp;&ensp;[Recover](#Recover)<br/>
@@ -2034,3 +2034,48 @@ var numCPU = runtime.GOMAXPROCS(0)
 ```
 
 注意并发——将程序分成独立执行的部分——和并行——让计算高效的并行运行在多个CPU上，不要弄混了。尽管Go的并发特性有助于进行并行编程，但Go是并发语言，而不是并行语言，Go的这种模型并不适用于所有并行问题。关于这个问题的讨论，可以看看[这篇文章](https://blog.golang.org/waza-talk)。
+
+### 缓冲漏桶
+
+为并发编程提供的这些工具甚至可以让一些非并发的场景更容易表达。下面的栗子抽象了一个RPC包。客户端的Go协程通过循环不断地从某种源上读取数据，也许是一个网络连接。为了避免分配和释放缓冲，它设计了一个空闲列表，具体就是用带缓冲的香奈儿来实现的。如果香奈儿是空的，那就分配一个新的缓冲。当消息缓冲准备就绪时就通过serverChan发送给服务端。
+
+```go
+var freeList = make(chan *Buffer, 100)
+var serverChan = make(chan *Buffer)
+
+func client() {
+    for {
+        var b *Buffer
+        // 有的化直接拿一个；没有就分配一个。
+        select {
+        case b = <-freeList:
+            // 有了；直接继续。
+        default:
+            // 没有闲的，分配一个。
+            b = new(Buffer)
+        }
+        load(b)              // 从网络上读取下一条消息。
+        serverChan <- b      // 发给服务端。
+    }
+}
+```
+
+服务端的循环就是读取每一条从客户端发过来的消息，然后处理，然后将缓冲返还给空闲列表。
+
+```go
+func server() {
+    for {
+        b := <-serverChan    // 等待新任务到达。
+        process(b)
+        // 如果还有空间，那就重用缓冲。
+        select {
+        case freeList <- b:
+            // 缓冲已存入空闲列表；直接继续。
+        default:
+            // 空闲列表已满，继续下一轮。
+        }
+    }
+}
+```
+
+客户端尝试从freeList中获取缓冲；如果没有，那就分配一个新的。当空闲列表还有空间的时候，服务端会将b返还给freeList，如果空闲列表已满，那么缓冲就直接被丢弃，等待垃圾回收。（当select语句中没有任何条件满足时，就会执行default，这样select就永远不会被阻塞。）这个栗子用若干行代码就实现了一个漏桶空闲列表，它依赖带缓冲的香奈儿以及垃圾回收器做记账工作。
