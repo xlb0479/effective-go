@@ -2115,3 +2115,22 @@ open /etc/passwx: no such file or directory
 
 这种错误信息，包含了程序中生成的文件名、文件操作，以及触发的操作系统错误，即便和真实调用它的地方离得很远，这种错误信息打印出来依然极具效果；这种信息比一句简单的“no such file or directory”更有用。
 
+可以的话，错误信息应该表明它们的发祥地，比如通过命名前缀来告诉我们产生错误的操作或者来自哪个包。比如在image包中，由于未知格式导致解码错误时，给出的提示就是“image: unknown format”。
+
+如果调用者需要了解错误的详细信息，可以用类型switch或者类型断言来查看具体的错误并提取出其中的细节。比如对于PathErrors，可能会需要检查一下内部的Err字段，发现某些可以恢复的错误。
+
+```go
+for try := 0; try < 2; try++ {
+    file, err = os.Create(filename)
+    if err == nil {
+        return
+    }
+    if e, ok := err.(*os.PathError); ok && e.Err == syscall.ENOSPC {
+        deleteTempFiles()  // 释放一些磁盘空间。
+        continue
+    }
+    return
+}
+```
+
+第二个if是另一种[类型断言](#接口转换与类型断言)。如果失败，ok就是false，e就是nil。如果成功，ok就是true，而错误对象就是*os.PathError类型，也就是e，然后就可以进一步探查其中的信息了。
