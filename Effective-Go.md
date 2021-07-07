@@ -2079,3 +2079,39 @@ func server() {
 ```
 
 客户端尝试从freeList中获取缓冲；如果没有，那就分配一个新的。当空闲列表还有空间的时候，服务端会将b返还给freeList，如果空闲列表已满，那么缓冲就直接被丢弃，等待垃圾回收。（当select语句中没有任何条件满足时，就会执行default，这样select就永远不会被阻塞。）这个栗子用若干行代码就实现了一个漏桶空闲列表，它依赖带缓冲的香奈儿以及垃圾回收器做记账工作。
+
+## 错误
+
+库函数经常需要给调用者返回某种错误提示。上面已经讲过，Go的多值返回可以让详细的错误信息跟正常的返回值一并返回。利用这种特性来返回详细的错误信息，这是一种非常良好的风格。比如os.Open在出错的时候不会仅返回一个nil，还会返回一个告诉你到底出什么问题的错误值。
+
+习惯上，错误信息都得是error类型，这是一个简单的内置接口。
+
+```go
+type error interface {
+    Error() string
+}
+```
+
+库函数的编写者可以自由实现这个接口，在内部加入更多丰富的功能，这样不仅可以返回错误信息，还可以返回一些上下文。比如上面提到的，os.Open的返回值中，跟*os.File一起的还有一个错误值。如果文件正常打开，错误值就是nil，如果真出了问题，那就会得到一个os.PathError：
+
+```go
+// PathError记录了错误信息以及导致错误的操作和文件路径。
+type PathError struct {
+    Op string    // “open”、“unlink”，等等。
+    Path string  // 对应的文件。
+    Err error    // 由系统调用返回。
+}
+
+func (e *PathError) Error() string {
+    return e.Op + " " + e.Path + ": " + e.Err.Error()
+}
+```
+
+PathError的Error生成的字符串格式：
+
+```text
+open /etc/passwx: no such file or directory
+```
+
+这种错误信息，包含了程序中生成的文件名、文件操作，以及触发的操作系统错误，即便和真实调用它的地方离得很远，这种错误信息打印出来依然极具效果；这种信息比一句简单的“no such file or directory”更有用。
+
