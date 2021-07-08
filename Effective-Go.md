@@ -56,7 +56,7 @@
 &ensp;&ensp;[并行](#并行)<br/>
 &ensp;&ensp;[缓冲漏桶](#缓冲漏桶)<br/>
 [错误](#错误)<br/>
-&ensp;&ensp;[Panic](#Panic)<br/>
+&ensp;&ensp;[慌的一批](#慌的一批)<br/>
 &ensp;&ensp;[Recover](#Recover)<br/>
 [一个web服务](#一个web服务)<br/>
 
@@ -2134,3 +2134,37 @@ for try := 0; try < 2; try++ {
 ```
 
 第二个if是另一种[类型断言](#接口转换与类型断言)。如果失败，ok就是false，e就是nil。如果成功，ok就是true，而错误对象就是*os.PathError类型，也就是e，然后就可以进一步探查其中的信息了。
+
+### 慌的一批
+
+一般我们都是返回一个额外的error来告诉调用者出现了什么问题。比如典型的Read方法；它返回一个字节数以及一个error。但如果错误是无法挽回的怎么办？有的时候程序可能直接就无法继续运行下去了。
+
+考虑到这种情况，我们设计了一个内置的panic函数，它可以创建一个运行时错误并让程序停止运行（下一节讲补救措施）。这个函数接收一个任意类型的参数——一般是字符串——当程序嗝屁的时候输出一下。这种方式通常用来表明某个不可能出现的情况真的出现了，比如退出了一个死循环。
+
+```go
+// 牛顿法计算立方根。
+func CubeRoot(x float64) float64 {
+    z := x/3   // 任意初始值
+    for i := 0; i < 1e6; i++ {
+        prevz := z
+        z -= (z*z*z-x) / (3*z*z)
+        if veryClose(z, prevz) {
+            return z
+        }
+    }
+    // 一百万次迭代还不够；出问题喽。
+    panic(fmt.Sprintf("CubeRoot(%g) did not converge", x))
+}
+```
+
+这里只是个栗子，真的库函数应当避免使用panic。如果问题能够被隐藏或者消解掉，那么最好还是让程序继续，而不是把整个程序直接干死。一个反例情况是初始化：如果库函数的确无法完成初始化，可以说它就有理由慌的一批。
+
+```go
+var user = os.Getenv("USER")
+
+func init() {
+    if user == "" {
+        panic("no value for $USER")
+    }
+}
+```
