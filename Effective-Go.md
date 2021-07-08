@@ -2168,3 +2168,63 @@ func init() {
     }
 }
 ```
+
+### Recover
+
+调用pannic的时候，包括运行时的隐式调用，比如slice越界，或者是错误的类型断言，它会立即停止执行当前函数并开始退出Go协程栈，同时执行所有的defer函数。如果退到了Go协程的栈顶，程序也就嗝屁了。但是可以使用内置的recover函数来重获新生，让程序继续运行。
+
+调用recover会停止退栈并返回panic的参数。因为在退栈的时候能执行的代码只有defer函数中的代码，所以recover只有在defer函数中才有效。
+
+recover的一种用法是在服务器程序中关闭一个异常的Go协程，避免其他的Go协程也被杀死。
+
+```go
+func server(workChan <-chan *Work) {
+    for work := range workChan {
+        go safelyDo(work)
+    }
+}
+
+func safelyDo(work *Work) {
+    defer func() {
+        if err := recover(); err != nil {
+            log.Println("work failed:", err)
+        }
+    }()
+    do(work)
+}
+```
+
+这里，如果do(work)慌球了，返回的错误信息会被记录下来，当前Go协程正常退出，不会打扰到其他人。defer函数中不用干什么特殊的事儿，调用一下recover就全包了。
+
+如果不是在defer函数中，调用recover则直接返回nil，defer调用库函数时不受panic和recover的影响。比如safelyDo中的defer函数，它可以在调用recover之前调用一个日志函数，日志函数的执行不受当前panic的影响。
+
+在我们的栗子中，do函数（以及它的调用方）对于panic调用都可以全身而退。我们基于这种思路就可以简化复杂软件中的错误处理机制。来看一个理想化的regexp包，当出现解析异常时会调用panic，并传入一个自定义的错误类型。下面的代码中包含了Error的定义、error方法，以及Compile函数。
+
+```go
+// 代表解析异常的Errir类型，满足了error接口。
+type Error string
+func (e Error) Error() string {
+    return string(e)
+}
+
+// errir是*Regexp的一个方法，调用panic来报告解析异常，并传入一个Error。
+func (regexp *Regexp) error(err string) {
+    panic(Error(err))
+}
+
+// Compile函数返回一个正则表达式的解析结果。
+func Compile(str string) (regexp *Regexp, err error) {
+    regexp = new(Regexp)
+    // 如果发生异常，doParse就慌球了。
+    defer func() {
+        if e := recover(); e != nil {
+            regexp = nil    // 清理返回值。
+            err = e.(Error) // 如果不是解析异常，那就继续慌球了。
+        }
+    }()
+    return regexp.doParse(str), nil
+}
+```
+
+如果doParse慌球了，异常恢复代码会将返回值设置为nil——defer函数可以修改有命名的返回值。然后在给err赋值的时候进行检查，通过断言错误类型是否为自定义的Error来判断问题是不是由于解析异常导致的。如果不是，类型断言失败，触发运行时异常，继续退栈，好似没有被中断过一样。也就是说，如果发生了某些意想不到的情况，比如索引越界，那么即便我们用了panic和recover来处理解析异常，但程序依然会慌球了。
+
