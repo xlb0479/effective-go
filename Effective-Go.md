@@ -20,7 +20,7 @@
 &ensp;&ensp;[返回多个值](#返回多个值)<br/>
 &ensp;&ensp;[返回值命名](#返回值命名)<br/>
 &ensp;&ensp;[Defer](#Defer)<br/>
-[数据类型](#数据类型)
+[数据类型](#数据类型)<br/>
 &ensp;&ensp;[用用new](#用用new)<br/>
 &ensp;&ensp;[构造方法与复合字面量](#构造方法与复合字面量)<br/>
 &ensp;&ensp;[用用make](#用用make)<br/>
