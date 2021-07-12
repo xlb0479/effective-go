@@ -51,8 +51,8 @@
 [并发](#并发)<br/>
 &ensp;&ensp;[利用通信来共享数据](#利用通信来共享数据)<br/>
 &ensp;&ensp;[Go协程](#Go协程)<br/>
-&ensp;&ensp;[Channel](#香奈儿)<br/>
-&ensp;&ensp;[Channel嵌套](#香奈儿嵌套)<br/>
+&ensp;&ensp;[香奈儿](#香奈儿)<br/>
+&ensp;&ensp;[香奈儿嵌套](#香奈儿嵌套)<br/>
 &ensp;&ensp;[并行](#并行)<br/>
 &ensp;&ensp;[缓冲漏桶](#缓冲漏桶)<br/>
 [错误](#错误)<br/>
