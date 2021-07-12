@@ -2239,3 +2239,72 @@ if pos == 0 {
 这种模式很有效，但是应该只限于包内使用。Parse将内部的panic调用转成了error值；它不会把panic暴露给客户端。这种风格我们都应该遵守。
 
 注意一下，这种重新发慌的路子会让真实的错误信息发生变化。但是在崩溃信息中会把原始的和新的异常都打出来，因此问题的根因依然可见。因此这种二慌法通常也就足够了——毕竟是崩溃了——但如果你只想显示根因，那可以再改改代码，过滤掉不需要的东西，用原始异常来进行二慌。这个事儿我们就留给读者解闷儿吧。
+
+## 一个web服务
+
+最后我们来搞一个完整的Go程序，一个Web服务。这个栗子实际上类似于某种代理服务。谷歌在chart.apis.google.com上提供了将数据转成图形图表的接口。但是没法交互式的使用，因为你要把数据放到URL里面。本例为其中一种数据格式提供了一个美观的交互界面：输入一段文本，它就会调用图形服务生成一个二维码，也就是这段文本的一个格子矩阵编码。你可以用手机摄像头来扫描这个图形并自动解释出来，比如你可以输入一个URL，这样后面你在手机上就不用再输入这个URL了，直接扫就行了。（看来这个世界上还真是有人不知道二维码啊。）
+
+下面我们给出完整程序。后面会进行说明。
+
+```go
+package main
+
+import (
+    "flag"
+    "html/template"
+    "log"
+    "net/http"
+)
+
+var addr = flag.String("addr", ":1718", "http service address") // Q=17, R=18
+
+var templ = template.Must(template.New("qr").Parse(templateStr))
+
+func main() {
+    flag.Parse()
+    http.Handle("/", http.HandlerFunc(QR))
+    err := http.ListenAndServe(*addr, nil)
+    if err != nil {
+        log.Fatal("ListenAndServe:", err)
+    }
+}
+
+func QR(w http.ResponseWriter, req *http.Request) {
+    templ.Execute(w, req.FormValue("s"))
+}
+
+const templateStr = `
+<html>
+<head>
+<title>QR Link Generator</title>
+</head>
+<body>
+{{if .}}
+<img src="http://chart.apis.google.com/chart?chs=300x300&cht=qr&choe=UTF-8&chl={{.}}" />
+<br>
+{{.}}
+<br>
+<br>
+{{end}}
+<form action="/" name=f method="GET">
+    <input maxLength=1024 size=70 name=s value="" title="Text to QR Encode">
+    <input type=submit value="Show QR" name=qr>
+</form>
+</body>
+</html>
+`
+```
+
+这一整段代码应该都不难理解。一开始的参数设置了默认的HTTP端口。模板变量templ是一切奥妙的核心所在。它构建了一个HTML模板，服务端用它来显示页面；一会儿再细说。
+
+main函数通过我们之前讲过的机制来解析参数，将QR函数绑定到服务的根路径上。然后调用http.LinstenAndServe来启动服务，服务运行时它将一直处于阻塞状态。
+
+QR函数收到请求，其中包含了表单数据，然后使用表单数据中名为s的值来执行模板。
+
+模板包html/template可厉害了；我们的程序只是看到了冰山一角。本质上讲，它就是要重写HTML文本，用templ.Execute的参数来替换指定的元素，本例中就是用了表单传过来的值。在模板文本（templateStr）中，双花括号括起来的部分表示模板动作。只有调用.（点）得到的当前值不为空的情况下才会执行{{if .}}到{{end}}的代码段。也就是说如果字符串为空，这段模板就会被抑制。
+
+两处{{.}}的作用就是将模板数据——查询字符串——展示到web页面上。HTML模板包自动进行转义，文本们可以放心展示自我。
+
+模板中剩余的部分就是些页面要加载的HTML而已。如果这块的东西你觉得讲得太快，那可以去看模板包的[文档](#文档)系统性的学习一下。
+
+到这儿就没了：几行代码搞出了一个有意义的web服务，还带着数据驱动的HTML文本。Go就是这样，几行文本就可以搞出很牛逼的东西。
