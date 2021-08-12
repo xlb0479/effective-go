@@ -5,4 +5,5 @@
 [Effective Go](https://golang.org/doc/effective_go)中文版
 
 123
-456
+789
+556
